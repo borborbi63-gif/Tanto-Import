@@ -815,9 +815,29 @@ td.mono{color:var(--muted);font-family:var(--fm);font-size:12px;}
       <div class="fg"><label>Código *</label><input class="fi" type="text" id="sp_codigo" placeholder="P-001"></div>
       <div class="fg"><label>Categoría</label><input class="fi" type="text" id="sp_categoria" placeholder="Lácteos, Embutidos..."></div>
       <div class="fg full"><label>Nombre del Producto *</label><input class="fi" type="text" id="sp_nombre" placeholder="Nombre completo del producto"></div>
-      <div class="fg"><label>Precio de Venta (S/.)</label><input class="fi" type="number" id="sp_precio" step="0.01" placeholder="0.00"></div>
+      <div class="fg"><label>Costo (S/.) <span style="color:var(--muted);font-size:10px">← precio de compra</span></label><input class="fi" type="number" id="sp_costo" step="0.01" placeholder="0.00" oninput="calcMargenModal()"></div>
+      <div class="fg"><label>Precio de Venta (S/.)</label><input class="fi" type="number" id="sp_precio" step="0.01" placeholder="0.00" oninput="calcMargenModal()"></div>
       <div class="fg"><label>Cantidad Disponible</label><input class="fi" type="number" id="sp_cantidad" placeholder="0"></div>
       <div class="fg"><label>Stock Mínimo (alerta)</label><input class="fi" type="number" id="sp_minimo" placeholder="10"></div>
+      <!-- MARGEN VISUAL -->
+      <div class="fg full" id="margenBox" style="display:none">
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 18px;display:flex;gap:28px;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <span style="font-family:var(--fm);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Ganancia unitaria</span>
+            <span style="font-family:var(--fd);font-size:22px" id="margenMonto">S/.0.00</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <span style="font-family:var(--fm);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Margen %</span>
+            <span style="font-family:var(--fd);font-size:22px" id="margenPct">0%</span>
+          </div>
+          <div style="flex:1;min-width:120px">
+            <div style="font-family:var(--fm);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Barra de margen</div>
+            <div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden">
+              <div id="margenBar" style="height:100%;border-radius:4px;transition:width .4s,background .4s;width:0%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeStockModal()">Cancelar</button>
@@ -1064,22 +1084,32 @@ async function apiCall(action, body={}){
   return await res.json();
 }
 
+function normalizeKeys(obj){
+  // Convierte todas las claves a minúsculas para compatibilidad con Sheets en mayúsculas
+  const n={};
+  Object.keys(obj).forEach(k=>{ n[k.toLowerCase()]=obj[k]; });
+  return n;
+}
+
 function parseRecords(raw){
-  return (raw||[]).map(r=>({
-    ...r,
-    total:    parseFloat(r.total)||0,
-    pago:     parseFloat(r.pago)||0,
-    saldo:    parseFloat(r.saldo)||0,
-    precio:   parseFloat(r.precio)||0,
-    cantidad: parseFloat(r.cantidad)||0,
-    minimo:   parseFloat(r.minimo)||0,
-    estado:   r.estado==='true'||r.estado===true,
-    // Normaliza fechas ISO a YYYY-MM-DD en hora Perú
-    fecha:    isoAFechaPeru(r.fecha)||r.fecha||'',
-    fechaPago:r.fechaPago&&r.fechaPago!=='null'&&r.fechaPago!==''
-              ? isoAFechaPeru(r.fechaPago)||r.fechaPago
-              : null,
-  }));
+  return (raw||[]).map(r=>{
+    const n=normalizeKeys(r);
+    return {
+      ...n,
+      total:    parseFloat(n.total)||0,
+      pago:     parseFloat(n.pago)||0,
+      saldo:    parseFloat(n.saldo)||0,
+      costo:    parseFloat(n.costo)||0,
+      precio:   parseFloat(n.precio)||0,
+      cantidad: parseFloat(n.cantidad)||0,
+      minimo:   parseFloat(n.minimo)||0,
+      estado:   n.estado==='true'||n.estado===true,
+      fecha:    isoAFechaPeru(n.fecha)||n.fecha||'',
+      fechaPago:n.fechapago&&n.fechapago!=='null'&&n.fechapago!==''
+                ? isoAFechaPeru(n.fechapago)||n.fechapago
+                : null,
+    };
+  });
 }
 
 async function loadAll(){
@@ -1096,7 +1126,7 @@ async function loadAll(){
     if(dVentas.error) throw new Error(dVentas.error);
     ventas    = parseRecords(dVentas.records);
     productos = parseRecords(dProductos.records||[]);
-    clientes  = dClientes.records||[];
+    clientes  = (dClientes.records||[]).map(normalizeKeys);
     almacen   = parseRecords(dAlmacen.records||[]);
     // Normaliza usuarios
     users = (dUsuarios.records||[]).map(u=>({
@@ -1143,11 +1173,11 @@ async function doLogin(){
     try{
       const d=await apiCall('getAll',{sheet:'usuarios'});
       users=(d.records||[]).map(x=>({
-        id:   String(x.id||''),
-        user: String(x.user||x.usuario||'').toLowerCase().trim(),
-        pass: String(x.pass||x.password||'').trim(),
-        name: String(x.name||x.nombre||'').trim(),
-        role: String(x.role||x.rol||'vendedor').toLowerCase().trim(),
+        id:   String(x.id||x.ID||''),
+        user: String(x.user||x.USER||x.usuario||'').toLowerCase().trim(),
+        pass: String(x.pass||x.PASS||x.password||'').trim(),
+        name: String(x.name||x.NAME||x.nombre||'').trim(),
+        role: String(x.role||x.ROLE||x.rol||'vendedor').toLowerCase().trim(),
       }));
     }catch(e){
       errEl.textContent='❌ Sin conexión con Sheets';
@@ -1827,13 +1857,26 @@ function renderStock(){
     const pct=Math.min(100,(p.cantidad/(p.minimo*3||30)*100)).toFixed(0);
     const color=p.cantidad<p.minimo?'var(--red)':p.cantidad<p.minimo*2?'var(--accent)':'var(--green)';
     const isLow=p.cantidad<p.minimo;
+    const costo=parseFloat(p.costo)||0;
+    const precio=parseFloat(p.precio)||0;
+    const ganancia=precio-costo;
+    const margenPct=precio>0?((ganancia/precio)*100):0;
+    const margenColor=margenPct>=30?'var(--green)':margenPct>=15?'var(--accent)':'var(--red)';
+    const margenStr=costo>0?`<div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-family:var(--fm);font-size:10px;color:var(--muted)">Costo: <span style="color:var(--text)">S/.${costo.toFixed(2)}</span></span>
+      <span style="font-family:var(--fm);font-size:10px;background:${margenColor}22;color:${margenColor};border:1px solid ${margenColor}44;border-radius:4px;padding:1px 6px">▲ ${margenPct.toFixed(1)}% margen</span>
+    </div>`:'';
     return `<div class="stock-card${isLow?' low':''}">
       <div class="sc-header">
         <span class="sc-code">${p.codigo}</span>
         <span class="sc-cat badge badge-blue">${p.categoria}</span>
       </div>
       <div class="sc-name">${p.nombre}</div>
-      <div class="sc-price">${fmt(p.precio)}</div>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <div class="sc-price">${fmt(p.precio)}</div>
+        ${costo>0?`<span style="font-family:var(--fm);font-size:12px;color:var(--muted)">venta</span>`:''}
+      </div>
+      ${margenStr}
       <div class="sc-stock">
         <div>
           <span class="sc-qty" style="color:${color}">📦 ${p.cantidad} unidades</span>
@@ -1899,6 +1942,23 @@ async function ajustarStock(id, delta){
   }
 }
 
+function calcMargenModal(){
+  const costo=parseFloat(document.getElementById('sp_costo').value)||0;
+  const precio=parseFloat(document.getElementById('sp_precio').value)||0;
+  const box=document.getElementById('margenBox');
+  if(!costo||!precio){box.style.display='none';return;}
+  box.style.display='';
+  const ganancia=precio-costo;
+  const pct=precio>0?((ganancia/precio)*100):0;
+  const color=pct>=30?'var(--green)':pct>=15?'var(--accent)':'var(--red)';
+  document.getElementById('margenMonto').textContent='S/.'+ganancia.toFixed(2);
+  document.getElementById('margenMonto').style.color=color;
+  document.getElementById('margenPct').textContent=pct.toFixed(1)+'%';
+  document.getElementById('margenPct').style.color=color;
+  document.getElementById('margenBar').style.width=Math.min(pct,100)+'%';
+  document.getElementById('margenBar').style.background=color;
+}
+
 function openStockModal(id=null){
   editingStockId=id;
   document.getElementById('stockModalTitle').textContent=id?'EDITAR PRODUCTO':'NUEVO PRODUCTO';
@@ -1908,12 +1968,15 @@ function openStockModal(id=null){
     document.getElementById('sp_codigo').value=p.codigo||'';
     document.getElementById('sp_categoria').value=p.categoria||'';
     document.getElementById('sp_nombre').value=p.nombre||'';
+    document.getElementById('sp_costo').value=p.costo||'';
     document.getElementById('sp_precio').value=p.precio||'';
     document.getElementById('sp_cantidad').value=p.cantidad||'';
     document.getElementById('sp_minimo').value=p.minimo||10;
+    calcMargenModal();
   } else {
-    ['sp_codigo','sp_categoria','sp_nombre','sp_precio','sp_cantidad'].forEach(i=>document.getElementById(i).value='');
+    ['sp_codigo','sp_categoria','sp_nombre','sp_costo','sp_precio','sp_cantidad'].forEach(i=>document.getElementById(i).value='');
     document.getElementById('sp_minimo').value='10';
+    document.getElementById('margenBox').style.display='none';
   }
   document.getElementById('stockOverlay').classList.add('open');
 }
@@ -1927,7 +1990,9 @@ async function saveProducto(){
   const record={
     id:editingStockId||'',
     codigo, categoria:document.getElementById('sp_categoria').value.trim()||'General',
-    nombre, precio:parseFloat(document.getElementById('sp_precio').value)||0,
+    nombre,
+    costo:parseFloat(document.getElementById('sp_costo').value)||0,
+    precio:parseFloat(document.getElementById('sp_precio').value)||0,
     cantidad:parseInt(document.getElementById('sp_cantidad').value)||0,
     minimo:parseInt(document.getElementById('sp_minimo').value)||10,
   };
