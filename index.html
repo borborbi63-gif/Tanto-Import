@@ -1076,12 +1076,25 @@ function hideLoading(){document.getElementById('loadingOverlay').classList.remov
 async function apiCall(action, body={}){
   const isGet = action==='getAll';
   const url = isGet ? `${API_URL}?action=getAll&sheet=${body.sheet||'ventas'}` : API_URL;
+  // delete necesita enviar record:{id} para el Apps Script
+  let payload = {action, ...body};
+  if(action==='delete' && body.id !== undefined && !body.record){
+    payload = {action, sheet:body.sheet, record:{id:body.id}};
+  }
   const opts = isGet
     ? {method:'GET'}
-    : {method:'POST', body:JSON.stringify({action, ...body})};
+    : {method:'POST', body:JSON.stringify(payload)};
   const res = await fetch(url, opts);
   if(!res.ok) throw new Error('HTTP '+res.status);
   return await res.json();
+}
+
+// Guardar múltiples filas en almacen una por una
+async function saveAlmacenItems(items){
+  for(const item of items){
+    const res = await apiCall('save',{sheet:'almacen', record:item});
+    if(res.error) console.warn('almacen save warn:', res.error);
+  }
 }
 
 function normalizeKeys(obj){
@@ -1533,25 +1546,34 @@ async function guardarVenta(){
     if(res.error) throw new Error(res.error);
     const ventaId=res.id||'';
 
-    // 2. Si hay carrito, guardar detalle en ALMACEN
+    // 2. Si hay carrito: guardar detalle en ALMACEN y descontar stock
     if(carrito.length>0){
       const descripcion=document.getElementById('v_descripcion').value;
+      // 2a. Guardar cada item en hoja almacen
       const items=carrito.map(x=>({
         id:'',
+        ventaid: ventaId,
         fecha,
         cliente,
         vendedor,
         descripcion,
         producto: x.nombre,
         codigo:   x.codigo||'',
-        categoria:productos.find(p=>String(p.id)===String(x.id))?.categoria||'',
+        categoria: (productos.find(p=>String(p.id)===String(x.id))?.categoria)||'',
         cantidad: x.cantidad,
-        precioUnit: x.precio,
+        preciounit: x.precio,
         subtotal: parseFloat((x.precio*x.cantidad).toFixed(2)),
-        ventaId,
       }));
-      const resAlm=await apiCall('saveAlmacen',{items});
-      if(resAlm.error) console.warn('Almacén warning:',resAlm.error);
+      await saveAlmacenItems(items);
+
+      // 2b. Descontar stock de cada producto
+      for(const item of carrito){
+        const prod = productos.find(p=>String(p.id)===String(item.id));
+        if(prod){
+          const nuevaCant = Math.max(0, (parseFloat(prod.cantidad)||0) - item.cantidad);
+          await apiCall('save',{sheet:'productos', record:{...prod, cantidad:nuevaCant}});
+        }
+      }
     }
 
     showToast('✅ Venta guardada en Google Sheets');
@@ -2426,8 +2448,9 @@ async function addUser(){
 
 async function removeUser(id){
   if(String(id)===String(currentUser?.id)){showToast('No puedes eliminarte a ti mismo','error');return;}
+  if(!confirm('¿Eliminar este usuario? Esta acción no se puede deshacer.')) return;
   try{
-    const res=await apiCall('delete',{sheet:'usuarios',id});
+    const res=await apiCall('delete',{sheet:'usuarios',record:{id}});
     if(res.error) throw new Error(res.error);
     showToast('🗑 Usuario eliminado');
     await loadAll();
