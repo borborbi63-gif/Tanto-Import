@@ -408,6 +408,7 @@ td.mono{color:var(--muted);font-family:var(--fm);font-size:12px;}
       <div id="stockAlertBadge" style="display:none;cursor:pointer" onclick="goPage('stock');document.getElementById('stock_filtro').value='low';renderStock()">
         <span style="background:var(--red);color:#fff;border-radius:8px;padding:5px 12px;font-size:12px;font-family:var(--fm)">⚠ Stock bajo</span>
       </div>
+      <button class="btn btn-primary" onclick="exportAnalisisCompleto()" style="background:linear-gradient(135deg,#ff6b1a,#ff9a50);font-size:13px;padding:8px 16px" title="Descargar análisis completo en Excel">📊 Análisis Excel</button>
       <button onclick="toggleTheme()" id="themeBtn" class="btn btn-ghost" style="font-size:16px;padding:7px 12px">🌙</button>
       <div class="sync-badge" id="syncBadge"><div class="sync-dot"></div><span id="syncText">—</span></div>
       <button class="btn btn-ghost" onclick="loadAll()">↻ Actualizar</button>
@@ -566,7 +567,7 @@ td.mono{color:var(--muted);font-family:var(--fm);font-size:12px;}
 <div class="page" id="page-registro">
   <div class="page-header">
     <div><div class="page-title">REGISTRO DE VENTAS</div><div class="page-sub">Historial completo de transacciones</div></div>
-    <button class="btn btn-ghost" onclick="exportCSV()">⬇ Exportar CSV</button>
+    <button class="btn btn-ghost" onclick="exportRegistroExcel()">⬇ Exportar Excel</button>
   </div>
   <div class="toolbar">
     <div class="search-box"><span class="si">🔍</span>
@@ -601,7 +602,7 @@ td.mono{color:var(--muted);font-family:var(--fm);font-size:12px;}
 <div class="page" id="page-reporte">
   <div class="page-header">
     <div><div class="page-title">REPORTES</div><div class="page-sub">Análisis detallado por fecha y vendedor</div></div>
-    <button class="btn btn-ghost" onclick="exportReporteCSV()">⬇ Exportar</button>
+    <button class="btn btn-ghost" onclick="exportReporteExcel()">⬇ Exportar Excel</button>
   </div>
   <div class="page-body">
     <div class="report-filters">
@@ -709,7 +710,7 @@ td.mono{color:var(--muted);font-family:var(--fm);font-size:12px;}
   <div class="page-header">
     <div><div class="page-title">CLIENTES</div><div class="page-sub">Base de datos de clientes registrados</div></div>
     <div style="display:flex;gap:10px">
-      <button class="btn btn-ghost" onclick="exportClientesCSV()">⬇ Exportar</button>
+      <button class="btn btn-ghost" onclick="exportClientesExcel()">⬇ Exportar Excel</button>
       <button class="btn btn-primary" onclick="openClienteModal()">＋ Nuevo Cliente</button>
     </div>
   </div>
@@ -1691,14 +1692,37 @@ function renderRegistro(){
   next.onclick=()=>{if(regPage<totalPages){regPage++;renderRegistro();}}; btns.appendChild(next);
 }
 
-function exportCSV(){
+function exportRegistroExcel(){
   const data=getRegFiltered();
-  const headers=['Fecha','Vendedor','Cliente','Descripcion','Total','Pago','Saldo','Factura','Comprobante','Estado'];
-  const rows=data.map(r=>[r.fecha,r.vendedor,r.cliente,r.descripcion,r.total,r.pago,r.saldo,r.factura,r.comprobante,r.estadoFinal].map(v=>`"${v||''}"`).join(','));
-  const csv=[headers.join(','),...rows].join('\n');
-  const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download=`tanto_ventas_${fechaHoyPeru()}.csv`; a.click();
-  showToast('📥 CSV exportado');
+  if(data.length===0){showToast('Sin datos para exportar','warn');return;}
+  const wb=XLSX.utils.book_new();
+  // Hoja principal
+  const headers=['Fecha','Vendedor','Cliente','Descripción','Total S/.','Pago S/.','Saldo S/.','Factura/Boleta','Comprobante','Nota','Estado'];
+  const rows=data.map(r=>[
+    r.fecha||'', r.vendedor||'', r.cliente||'', r.descripcion||'',
+    parseFloat(r.total)||0, parseFloat(r.pago)||0, parseFloat(r.saldo)||0,
+    r.factura||'', r.comprobante||'', r.nota||'', r.estadoFinal||''
+  ]);
+  const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
+  ws['!cols']=[{wch:12},{wch:18},{wch:24},{wch:22},{wch:12},{wch:12},{wch:12},{wch:16},{wch:14},{wch:10},{wch:12}];
+  // Totales
+  const tr=rows.length+2;
+  XLSX.utils.sheet_add_aoa(ws,[['','','','TOTALES →',
+    data.reduce((s,r)=>s+r.total,0),
+    data.reduce((s,r)=>s+r.pago,0),
+    data.reduce((s,r)=>s+r.saldo,0),'','','',''
+  ]],{origin:`A${tr}`});
+  XLSX.utils.book_append_sheet(wb,ws,'Ventas');
+  // Hoja resumen por vendedor
+  const byV={};
+  data.forEach(r=>{const k=r.vendedor||'Sin nombre';if(!byV[k])byV[k]={vendedor:k,cantidad:0,total:0,cobrado:0,saldo:0,cancelados:0,pendientes:0};byV[k].cantidad++;byV[k].total+=r.total;byV[k].cobrado+=r.pago;byV[k].saldo+=r.saldo;if(r.estadoFinal==='CANCELADO')byV[k].cancelados++;if(r.estadoFinal==='PENDIENTE')byV[k].pendientes++;});
+  const wsvH=['Vendedor','Cant. Ventas','Total S/.','Cobrado S/.','Saldo S/.','Cancelados','Pendientes'];
+  const wsvR=Object.values(byV).sort((a,b)=>b.total-a.total).map(v=>[v.vendedor,v.cantidad,v.total,v.cobrado,v.saldo,v.cancelados,v.pendientes]);
+  const wsv=XLSX.utils.aoa_to_sheet([wsvH,...wsvR]);
+  wsv['!cols']=[{wch:20},{wch:14},{wch:14},{wch:14},{wch:14},{wch:12},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,wsv,'Por Vendedor');
+  XLSX.writeFile(wb,`tanto_ventas_${fechaHoyPeru()}.xlsx`);
+  showToast('📥 Registro exportado como Excel');
 }
 
 // ════════════════════════════════════════
@@ -1845,13 +1869,29 @@ function renderReporte(){
   }).join('');
 }
 
-function exportReporteCSV(){
+function exportReporteExcel(){
   const data=getRepFiltered();
-  const headers=['Fecha','Vendedor','Cliente','Descripcion','Total','Pago','Saldo','Comprobante','Estado'];
-  const rows=data.map(r=>[r.fecha,r.vendedor,r.cliente,r.descripcion,r.total,r.pago,r.saldo,r.comprobante,r.estadoFinal].map(v=>`"${v||''}"`).join(','));
-  const csv=[headers.join(','),...rows].join('\n');
-  const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download=`tanto_reporte_${fechaHoyPeru()}.csv`; a.click();
+  if(data.length===0){showToast('Sin datos para exportar','warn');return;}
+  const wb=XLSX.utils.book_new();
+  const headers=['Fecha','Vendedor','Cliente','Descripción','Total S/.','Pago S/.','Saldo S/.','Comprobante','Estado'];
+  const rows=data.map(r=>[r.fecha||'',r.vendedor||'',r.cliente||'',r.descripcion||'',parseFloat(r.total)||0,parseFloat(r.pago)||0,parseFloat(r.saldo)||0,r.comprobante||'',r.estadoFinal||'']);
+  const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
+  ws['!cols']=[{wch:12},{wch:18},{wch:24},{wch:22},{wch:12},{wch:12},{wch:12},{wch:14},{wch:12}];
+  const tr=rows.length+2;
+  XLSX.utils.sheet_add_aoa(ws,[['','','','TOTALES →',
+    data.reduce((s,r)=>s+r.total,0),data.reduce((s,r)=>s+r.pago,0),data.reduce((s,r)=>s+r.saldo,0),'',''
+  ]],{origin:`A${tr}`});
+  XLSX.utils.book_append_sheet(wb,ws,'Reporte');
+  // Evolución diaria
+  const byDay={};
+  data.forEach(r=>{if(r.fecha){const k=r.fecha;if(!byDay[k])byDay[k]={fecha:k,ventas:0,total:0,cobrado:0};byDay[k].ventas++;byDay[k].total+=r.total;byDay[k].cobrado+=r.pago;}});
+  const wsdH=['Fecha','N° Ventas','Total S/.','Cobrado S/.'];
+  const wsdR=Object.values(byDay).sort((a,b)=>a.fecha>b.fecha?1:-1).map(d=>[d.fecha,d.ventas,d.total,d.cobrado]);
+  const wsd=XLSX.utils.aoa_to_sheet([wsdH,...wsdR]);
+  wsd['!cols']=[{wch:12},{wch:12},{wch:14},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,wsd,'Evolución Diaria');
+  XLSX.writeFile(wb,`tanto_reporte_${fechaHoyPeru()}.xlsx`);
+  showToast('📥 Reporte exportado como Excel');
 }
 
 // ════════════════════════════════════════
@@ -2347,14 +2387,27 @@ async function guardarCliente(){
   }
 }
 
-function exportClientesCSV(){
+function exportClientesExcel(){
   const data=getCliFiltrado();
-  const headers=['Nombre','Celular','DNI','RUC','Email','Direccion','Registrado'];
-  const rows=data.map(c=>[c.nombre,c.celular,c.dni,c.ruc,c.email,c.direccion,c.creado].map(v=>`"${v||''}"`).join(','));
-  const csv=[headers.join(','),...rows].join('\n');
-  const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download=`tanto_clientes_${fechaHoyPeru()}.csv`; a.click();
-  showToast('📥 CSV de clientes exportado');
+  if(data.length===0){showToast('Sin clientes para exportar','warn');return;}
+  const wb=XLSX.utils.book_new();
+  const headers=['Nombre / Razón Social','Celular','DNI','RUC','Email','Dirección','Fecha Registro','Total Compras S/.','N° Ventas','Saldo Pendiente S/.'];
+  const rows=data.map(c=>{
+    const ventasCli=ventas.filter(v=>(v.cliente||'').toLowerCase()===(c.nombre||'').toLowerCase());
+    const totalCompras=ventasCli.reduce((s,v)=>s+v.total,0);
+    const saldoPend=ventasCli.reduce((s,v)=>s+v.saldo,0);
+    return [c.nombre||'',c.celular||'',c.dni||'',c.ruc||'',c.email||'',c.direccion||'',c.creado||'',totalCompras,ventasCli.length,saldoPend];
+  });
+  const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
+  ws['!cols']=[{wch:26},{wch:13},{wch:11},{wch:13},{wch:24},{wch:28},{wch:14},{wch:16},{wch:11},{wch:18}];
+  XLSX.utils.book_append_sheet(wb,ws,'Clientes');
+  // Top clientes
+  const topRows=rows.slice().sort((a,b)=>b[7]-a[7]).slice(0,20);
+  const wsTop=XLSX.utils.aoa_to_sheet([['Nombre','Total Compras S/.','N° Ventas','Saldo Pendiente S/.'],[...topRows.map(r=>[r[0],r[7],r[8],r[9]])]]);
+  wsTop['!cols']=[{wch:26},{wch:18},{wch:12},{wch:18}];
+  XLSX.utils.book_append_sheet(wb,wsTop,'Top 20 Clientes');
+  XLSX.writeFile(wb,`tanto_clientes_${fechaHoyPeru()}.xlsx`);
+  showToast('📥 Clientes exportados como Excel');
 }
 
 // ════════════════════════════════════════
@@ -2681,6 +2734,195 @@ function exportStockExcel(){
   XLSX.utils.book_append_sheet(wb,ws,'Stock');
   XLSX.writeFile(wb,`tanto_stock_${fechaHoyPeru()}.xlsx`);
   showToast('📥 Stock exportado');
+}
+
+// ════════════════════════════════════════
+// ANÁLISIS COMPLETO — DESCARGA XLSX
+// ════════════════════════════════════════
+async function exportAnalisisCompleto(){
+  if(ventas.length===0&&productos.length===0){showToast('No hay datos para analizar','warn');return;}
+  showLoading('GENERANDO ANÁLISIS COMPLETO...');
+  try{
+    const wb=XLSX.utils.book_new();
+    const hoy=fechaHoyPeru();
+    const mv=getMyVentas();
+    const mes=hoy.slice(0,7);
+    const semana=(() => { const d=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Lima'})); d.setDate(d.getDate()-7); return d.toISOString().split('T')[0]; })();
+
+    // ── HOJA 1: RESUMEN EJECUTIVO ──
+    const vTotal=mv.reduce((s,v)=>s+v.total,0);
+    const vCobrado=mv.reduce((s,v)=>s+v.pago,0);
+    const vSaldo=mv.reduce((s,v)=>s+v.saldo,0);
+    const vHoy=mv.filter(v=>v.fecha===hoy).reduce((s,v)=>s+v.total,0);
+    const vSemana=mv.filter(v=>v.fecha>=semana).reduce((s,v)=>s+v.total,0);
+    const vMes=mv.filter(v=>(v.fecha||'').startsWith(mes)).reduce((s,v)=>s+v.total,0);
+    const cancelados=mv.filter(v=>v.estadoFinal==='CANCELADO').length;
+    const pendientes=mv.filter(v=>v.estadoFinal==='PENDIENTE').length;
+    const pctCobro=vTotal>0?((vCobrado/vTotal)*100):0;
+    const ticketProm=mv.length>0?(vTotal/mv.length):0;
+    const lowStock=productos.filter(p=>p.cantidad<p.minimo);
+    const valorInventario=productos.reduce((s,p)=>s+(p.precio*p.cantidad),0);
+    const costoInventario=productos.reduce((s,p)=>s+(p.costo*p.cantidad),0);
+
+    const resumen=[
+      ['TANTO IMPORT — ANÁLISIS COMPLETO DE NEGOCIO','','',''],
+      [`Generado: ${hoy}`,'','',''],
+      ['','','',''],
+      ['═══════════════════════════════════════════════════════','','',''],
+      ['VENTAS','Valor','','Indicador'],
+      ['Total Ventas (histórico)','S/. '+vTotal.toFixed(2),'',''],
+      ['Total Cobrado','S/. '+vCobrado.toFixed(2),'',''],
+      ['Saldo Pendiente','S/. '+vSaldo.toFixed(2),'','⚠ POR COBRAR'],
+      ['% Cobro efectivo',(pctCobro.toFixed(1)+'%'),'',''],
+      ['Ticket promedio','S/. '+ticketProm.toFixed(2),'',''],
+      ['Ventas hoy','S/. '+vHoy.toFixed(2),'','hoy: '+hoy],
+      ['Ventas esta semana','S/. '+vSemana.toFixed(2),'','últimos 7 días'],
+      ['Ventas este mes','S/. '+vMes.toFixed(2),'','mes: '+mes],
+      ['N° total registros',mv.length,'',''],
+      ['Cancelados (pagados)',cancelados,'',''],
+      ['Pendientes de pago',pendientes,'',''],
+      ['','','',''],
+      ['═══════════════════════════════════════════════════════','','',''],
+      ['INVENTARIO','Valor','',''],
+      ['N° productos registrados',productos.length,'',''],
+      ['Valor inventario (precio venta)','S/. '+valorInventario.toFixed(2),'',''],
+      ['Valor inventario (costo)','S/. '+costoInventario.toFixed(2),'',''],
+      ['Ganancia potencial inventario','S/. '+(valorInventario-costoInventario).toFixed(2),'',''],
+      ['Productos con stock bajo',lowStock.length,'','lowStock.length>0 ? "⚠ REVISAR" : "OK"'],
+      ['','','',''],
+      ['═══════════════════════════════════════════════════════','','',''],
+      ['PRODUCTOS CON STOCK BAJO','Stock Actual','Stock Mínimo','Faltante'],
+      ...lowStock.map(p=>[p.nombre,''+p.cantidad,''+p.minimo,''+(p.minimo-p.cantidad)+' uds']),
+      ...(lowStock.length===0?[['(ningún producto con stock bajo)','','','']]:[]),
+    ];
+    const ws1=XLSX.utils.aoa_to_sheet(resumen);
+    ws1['!cols']=[{wch:40},{wch:22},{wch:16},{wch:18}];
+    ws1['!merges']=[{s:{r:0,c:0},e:{r:0,c:3}}];
+    XLSX.utils.book_append_sheet(wb,ws1,'📋 Resumen Ejecutivo');
+
+    // ── HOJA 2: VENTAS POR VENDEDOR ──
+    const byVend={};
+    mv.forEach(v=>{
+      const k=v.vendedor||'Sin nombre';
+      if(!byVend[k]) byVend[k]={nombre:k,ventas:0,total:0,cobrado:0,saldo:0,cancelados:0,pendientes:0,tickets:[]};
+      byVend[k].ventas++; byVend[k].total+=v.total; byVend[k].cobrado+=v.pago; byVend[k].saldo+=v.saldo;
+      if(v.estadoFinal==='CANCELADO') byVend[k].cancelados++;
+      if(v.estadoFinal==='PENDIENTE') byVend[k].pendientes++;
+      byVend[k].tickets.push(v.total);
+    });
+    const vendH=['Vendedor','N° Ventas','Total S/.','Cobrado S/.','Saldo S/.','% Cobro','Ticket Prom. S/.','Cancelados','Pendientes'];
+    const vendR=Object.values(byVend).sort((a,b)=>b.total-a.total).map(v=>[
+      v.nombre, v.ventas, +v.total.toFixed(2), +v.cobrado.toFixed(2), +v.saldo.toFixed(2),
+      +(v.total>0?(v.cobrado/v.total*100):0).toFixed(1),
+      +(v.ventas>0?(v.total/v.ventas):0).toFixed(2),
+      v.cancelados, v.pendientes
+    ]);
+    const totalVend=['TOTAL',mv.length,+vTotal.toFixed(2),+vCobrado.toFixed(2),+vSaldo.toFixed(2),+pctCobro.toFixed(1),+ticketProm.toFixed(2),cancelados,pendientes];
+    const ws2=XLSX.utils.aoa_to_sheet([vendH,...vendR,[''],totalVend]);
+    ws2['!cols']=[{wch:20},{wch:11},{wch:14},{wch:14},{wch:14},{wch:10},{wch:16},{wch:12},{wch:12}];
+    XLSX.utils.book_append_sheet(wb,ws2,'👤 Por Vendedor');
+
+    // ── HOJA 3: VENTAS POR MES ──
+    const byMes={};
+    mv.forEach(v=>{if(v.fecha){const m=String(v.fecha).slice(0,7);if(!byMes[m])byMes[m]={mes:m,ventas:0,total:0,cobrado:0,saldo:0};byMes[m].ventas++;byMes[m].total+=v.total;byMes[m].cobrado+=v.pago;byMes[m].saldo+=v.saldo;}});
+    const meses=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    const mesH=['Mes','N° Ventas','Total S/.','Cobrado S/.','Saldo S/.','% Cobro'];
+    const mesR=Object.values(byMes).sort((a,b)=>a.mes>b.mes?1:-1).map(m=>{
+      const [y,mo]=m.mes.split('-');
+      return [meses[parseInt(mo)-1]+' '+y, m.ventas, +m.total.toFixed(2), +m.cobrado.toFixed(2), +m.saldo.toFixed(2), +(m.total>0?(m.cobrado/m.total*100):0).toFixed(1)];
+    });
+    const ws3=XLSX.utils.aoa_to_sheet([mesH,...mesR]);
+    ws3['!cols']=[{wch:14},{wch:11},{wch:14},{wch:14},{wch:14},{wch:10}];
+    XLSX.utils.book_append_sheet(wb,ws3,'📅 Por Mes');
+
+    // ── HOJA 4: TOP CLIENTES ──
+    const byCliente={};
+    mv.forEach(v=>{
+      const k=(v.cliente||'Sin nombre').trim();
+      if(!byCliente[k]) byCliente[k]={nombre:k,ventas:0,total:0,cobrado:0,saldo:0,ultima:''};
+      byCliente[k].ventas++; byCliente[k].total+=v.total; byCliente[k].cobrado+=v.pago; byCliente[k].saldo+=v.saldo;
+      if(!byCliente[k].ultima||v.fecha>byCliente[k].ultima) byCliente[k].ultima=v.fecha;
+    });
+    const cliH=['Cliente','N° Compras','Total S/.','Cobrado S/.','Saldo Pendiente S/.','Última Compra','Estado Crediticio'];
+    const cliR=Object.values(byCliente).sort((a,b)=>b.total-a.total).map(c=>[
+      c.nombre, c.ventas, +c.total.toFixed(2), +c.cobrado.toFixed(2), +c.saldo.toFixed(2),
+      c.ultima||'',
+      c.saldo>500?'⚠ Saldo Alto':c.saldo>0?'Saldo Pendiente':'✓ Al día'
+    ]);
+    const ws4=XLSX.utils.aoa_to_sheet([cliH,...cliR]);
+    ws4['!cols']=[{wch:26},{wch:12},{wch:14},{wch:14},{wch:18},{wch:14},{wch:18}];
+    XLSX.utils.book_append_sheet(wb,ws4,'🏆 Top Clientes');
+
+    // ── HOJA 5: ANÁLISIS STOCK ──
+    const stockH=['Código','Categoría','Nombre','Costo S/.','Precio Venta S/.','Margen %','Ganancia Unit. S/.','Stock Actual','Stock Mínimo','Valor Inventario S/.','Estado Stock','Alerta'];
+    const stockR=productos.map(p=>{
+      const costo=parseFloat(p.costo)||0;
+      const precio=parseFloat(p.precio)||0;
+      const margen=precio>0?((precio-costo)/precio*100):0;
+      const gan=precio-costo;
+      const valInv=precio*p.cantidad;
+      const isLow=p.cantidad<p.minimo;
+      return [
+        p.codigo||'',p.categoria||'',p.nombre||'',
+        +costo.toFixed(2),+precio.toFixed(2),+margen.toFixed(1),+gan.toFixed(2),
+        p.cantidad,p.minimo,+valInv.toFixed(2),
+        isLow?'⚠ STOCK BAJO':'OK',
+        isLow?('Faltan '+(p.minimo-p.cantidad)+' uds'):''
+      ];
+    }).sort((a,b)=>b[9]-a[9]);
+    const stockTot=['','','','TOTALES →','','','',
+      productos.reduce((s,p)=>s+p.cantidad,0),'',
+      +valorInventario.toFixed(2),'',''
+    ];
+    const ws5=XLSX.utils.aoa_to_sheet([stockH,...stockR,[''],stockTot]);
+    ws5['!cols']=[{wch:12},{wch:14},{wch:30},{wch:10},{wch:14},{wch:10},{wch:16},{wch:12},{wch:13},{wch:18},{wch:14},{wch:16}];
+    XLSX.utils.book_append_sheet(wb,ws5,'📦 Análisis Stock');
+
+    // ── HOJA 6: PRODUCTOS MÁS VENDIDOS (desde almacen) ──
+    if(almacen.length>0){
+      const byProd={};
+      almacen.forEach(a=>{
+        const k=(a.producto||'Sin nombre').trim();
+        if(!byProd[k]) byProd[k]={nombre:k,codigo:a.codigo||'',categoria:a.categoria||'',unidades:0,ingresos:0,ventas:0};
+        byProd[k].unidades+=parseFloat(a.cantidad)||0;
+        byProd[k].ingresos+=parseFloat(a.subtotal)||0;
+        byProd[k].ventas++;
+      });
+      const prodH=['Producto','Código','Categoría','Unidades Vendidas','Ingresos S/.','N° Apariciones','Precio Prom. S/.'];
+      const prodR=Object.values(byProd).sort((a,b)=>b.ingresos-a.ingresos).map(p=>[
+        p.nombre,p.codigo,p.categoria,p.unidades,+p.ingresos.toFixed(2),p.ventas,
+        +(p.unidades>0?(p.ingresos/p.unidades):0).toFixed(2)
+      ]);
+      const ws6=XLSX.utils.aoa_to_sheet([prodH,...prodR]);
+      ws6['!cols']=[{wch:30},{wch:12},{wch:14},{wch:16},{wch:14},{wch:16},{wch:14}];
+      XLSX.utils.book_append_sheet(wb,ws6,'🔥 Más Vendidos');
+    }
+
+    // ── HOJA 7: CUENTAS POR COBRAR ──
+    const pendientesList=mv.filter(v=>parseFloat(v.saldo||0)>0).sort((a,b)=>b.saldo-a.saldo);
+    if(pendientesList.length>0){
+      const cobH=['Cliente','Vendedor','Fecha Venta','Fecha Pago Pactada','Total S/.','Pagado S/.','Saldo S/.','Días Transcurridos','Estado'];
+      const cobR=pendientesList.map(v=>{
+        const diasTranscurridos=v.fecha?Math.floor((new Date(hoy)-new Date(v.fecha))/(1000*60*60*24)):0;
+        return [
+          v.cliente||'',v.vendedor||'',v.fecha||'',v.fechaPago||'—',
+          +v.total.toFixed(2),+v.pago.toFixed(2),+v.saldo.toFixed(2),
+          diasTranscurridos,
+          diasTranscurridos>30?'🔴 +30 días':diasTranscurridos>15?'🟡 +15 días':'🟢 Reciente'
+        ];
+      });
+      const cobTot=['TOTAL PENDIENTE','','','','','',(+vSaldo.toFixed(2)),'',''];
+      const ws7=XLSX.utils.aoa_to_sheet([cobH,...cobR,[''],cobTot]);
+      ws7['!cols']=[{wch:24},{wch:16},{wch:13},{wch:16},{wch:12},{wch:12},{wch:12},{wch:18},{wch:14}];
+      XLSX.utils.book_append_sheet(wb,ws7,'💸 Cuentas por Cobrar');
+    }
+
+    XLSX.writeFile(wb,`tanto_analisis_completo_${hoy}.xlsx`);
+    showToast('📊 Análisis completo descargado — '+(wb.SheetNames.length)+' hojas');
+  }catch(e){
+    showToast('❌ Error al generar análisis: '+e.message,'error');
+    console.error(e);
+  }finally{hideLoading();}
 }
 
 // ════════════════════════════════════════
